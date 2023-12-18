@@ -1,7 +1,7 @@
 [project]
 name = "p9fs"
 version = "0.0.1"
-description = "9P implementation of fsspec"
+description = "9P implementation of Python fsspec"
 license = {file = "LICENSE"}
 readme = "README.md"
 authors = [
