@@ -1,6 +1,6 @@
 [project]
 name = "p9fs"
-version = "0.0.2"
+version = "0.0.3"
 description = "9P implementation of Python fsspec"
 license = {file = "LICENSE"}
 readme = "README.md"
@@ -27,6 +27,9 @@ dependencies = [
 tests = [
     "pytest",
 ]
+
+[project.entry-points."fsspec.specs"]
+p9 = "p9fs.P9FileSystem"
 
 [build-system]
 requires = ["setuptools"]

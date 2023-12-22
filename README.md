@@ -22,9 +22,17 @@ fs = p9fs.P9FileSystem(
     host='127.0.0.1',
     port=564,
     username='nobody',
+    version='9P2000.L',
 )
 
 print(fs.ls('.'))
+```
+
+```python
+import fsspec
+
+with fsspec.open('p9://nobody@127.0.0.1:564/folder/data.csv?version=9P2000.L') as f:
+    data = f.read()
 ```
 
 ## TODO

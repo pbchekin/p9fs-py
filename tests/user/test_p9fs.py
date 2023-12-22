@@ -15,6 +15,7 @@ Pass this TMPDIR to the test suite with `--exported`:
 
 import pathlib
 
+import fsspec
 import pytest
 
 import p9fs
@@ -152,3 +153,10 @@ def test_copy(fs, exported_path):
 
     fs.copy('test_copy/yyy', '.')
     assert fs.isfile('yyy')
+
+
+def test_registration(fs, exported_path):
+    url = f'p9://{fs.username}@{fs.host}:{fs.port}/xxx?version={fs.version.value}'
+    with fsspec.open(url, 'r') as f:
+        data = f.read()
+        assert data == 'This is a test content'
