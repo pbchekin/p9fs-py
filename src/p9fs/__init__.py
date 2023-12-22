@@ -49,7 +49,6 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     password: Optional[str]
     version: Version
     verbose: bool
-    msize: int = 8192
 
     def __init__(
         self,
@@ -169,6 +168,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     @with_fid
     def _lsdir(self, tfid, path):
+        """Lists dir entries for 9P2000/9P2000.u"""
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts)
         try:
@@ -177,7 +177,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
             items = []
             offset = 0
             while True:
-                response = self.client._read(tfid, offset, self.msize)
+                response = self.client._read(tfid, offset, self.client.msize)
                 buffer = response.data
                 if len(buffer) == 0:
                     break
@@ -192,6 +192,32 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         finally:
             self.client._clunk(tfid)
 
+    @with_fid
+    def _readdir(self, tfid, path):
+        """Lists dir entries for 9P2000.L"""
+        p = pathlib.Path(path)
+        self.client._walk(self.client.ROOT, tfid, p.parts)
+        try:
+            response = self.client._lopen(tfid, py9p.OREAD)
+            if response is None:
+                return []
+            items = []
+            offset = 0
+            while True:
+                response = self.client._readdir(tfid, offset, self.client.msize)
+                if response.count == 0:
+                    break
+                for entry in response.stat:
+                    if entry.name == '.' or entry.name == '..':
+                        continue
+                    name = str(p / entry.name)
+                    if entry.qid.type & py9p.QTDIR:
+                        name = f'{name}/'
+                    items.append(name)
+                offset = response.stat[-1].offset
+            return items
+        finally:
+            self.client._clunk(tfid)
 
     @with_fid
     def _open_fid(self, tfid, path, mode):
@@ -292,8 +318,12 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         if info['type'] != 'directory':
             return info if detail else info['name']
 
-        items = self._lsdir(path)
-        return items if detail else [item['name'] for item in items]
+        if self.version == Version.v9P2000L:
+            items = self._readdir(path)
+            return items if not detail else [self.info(item) for item in items]
+        else:
+            items = self._lsdir(path)
+            return items if detail else [item['name'] for item in items]
 
     def _rm(self, path):
         self._unlink(path)
@@ -315,9 +345,9 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         sf = self._open_fid(path1, os.O_RDONLY)
         df = self._open_fid(path2, os.O_WRONLY | os.O_TRUNC)
         try:
-            for i in range((src_info['size'] + self.msize - 1) // self.msize):
-                block = self._read(self.msize, i * self.msize, sf)
-                self._write(block, i * self.msize, df)
+            for i in range((src_info['size'] + self.client.msize - 1) // self.client.msize):
+                block = self._read(self.client.msize, i * self.client.msize, sf)
+                self._write(block, i * self.client.msize, df)
         finally:
             self._release_fid(sf)
             self._release_fid(df)

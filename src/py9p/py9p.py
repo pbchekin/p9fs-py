@@ -49,8 +49,12 @@ cmdName = {}
 
 Tlerror = 6
 Rlerror = 7
+Tlopen = 12
+Rlopen = 13
 Tgetattr = 24
 Rgetattr = 25
+Treaddir = 40
+Rreaddir = 41
 Tmkdir = 72
 Rmkdir = 73
 Tunlinkat = 76
@@ -450,8 +454,7 @@ class Marshal9P(object):
             if self.dotu:
                 self.encS(fcall.extension)
         elif fcall.type == Tread:
-            self.encF("=IQI", fcall.fid, fcall.offset,
-                    fcall.count)
+            self.encF("=IQI", fcall.fid, fcall.offset, fcall.count)
         elif fcall.type == Rread:
             self.encD(fcall.data)
         elif fcall.type == Twrite:
@@ -478,6 +481,10 @@ class Marshal9P(object):
             self.encF("I", fcall.fid)
             self.encS(fcall.name)
             self.enc4(fcall.flags)
+        elif fcall.type == Treaddir:
+            self.encF("=IQI", fcall.fid, fcall.offset, fcall.count)
+        elif fcall.type == Tlopen:
+            self.encF("=II", fcall.fid, fcall.flags)
 
     def decstat(self, stats, enclen=0):
         if enclen:
@@ -524,6 +531,16 @@ class Marshal9P(object):
         s.mtime = (self.dec8(), self.dec8())
         s.ctime = (self.dec8(), self.dec8())
         stats.append(s)
+
+    def decdirentry(self, stats, count):
+        """Decode DirEntry returned by Rreaddir for 9P2000.L"""
+        while self.buf.tell() < self.length:
+            entry = DirEntry()
+            entry.qid = self.decQ()
+            entry.offset = self.dec8()
+            entry.type = self.dec1()
+            entry.name = self.decS().decode('utf-8')
+            stats.append(entry)
 
     def dec(self, fcall):
         if fcall.type in (Tversion, Rversion):
@@ -600,6 +617,12 @@ class Marshal9P(object):
             self.dec8()  # valid mask
             fcall.qid = self.decQ()
             self.decstatL(fcall.stat)
+        elif fcall.type == Rreaddir:
+            fcall.count = self.dec4()
+            self.decdirentry(fcall.stat, fcall.count)
+        elif fcall.type == Rlopen:
+            fcall.qid = self.decQ()
+            fcall.iounit = self.dec4()
 
         return fcall
 
@@ -825,6 +848,13 @@ class Fid(object):
         self.path = path
 
         pool[fid] = self
+
+
+class DirEntry:
+    qid: Qid
+    offset: int
+    type: int
+    name: str
 
 
 class Dir(object):
@@ -1620,6 +1650,12 @@ class Client(object):
         fcall.mode = mode
         return self._rpc(fcall)
 
+    def _lopen(self, fid, mode):
+        fcall = Fcall(Tlopen)
+        fcall.fid = fid
+        fcall.flags = mode
+        return self._rpc(fcall)
+
     def _create(self, fid, name, perm, mode, extension=b""):
         fcall = Fcall(Tcreate)
         fcall.fid = fid
@@ -1642,6 +1678,15 @@ class Client(object):
         fcall.offset = off
         if count > self.msize - IOHDRSZ:
             count = self.msize - IOHDRSZ
+        fcall.count = count
+        return self._rpc(fcall)
+
+    def _readdir(self, fid, offset, count):
+        fcall = Fcall(Treaddir)
+        fcall.fid = fid
+        fcall.offset = offset
+        if count > self.msize - 22:
+            count = self.msize - 22
         fcall.count = count
         return self._rpc(fcall)
 
