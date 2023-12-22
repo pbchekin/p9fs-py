@@ -101,7 +101,6 @@ class P9FileSystem(fsspec.AbstractFileSystem):
             for item in url_query.split('&'):
                 key, value = item.split('=')
                 options[key] = value
-        print(f'{options=}')
         return options
 
     def _connect(self):

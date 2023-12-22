@@ -156,7 +156,7 @@ def test_copy(fs, exported_path):
 
 
 def test_registration(fs, exported_path):
-    url = f'p9://{fs.username}@{fs.host}:{fs.port}/xxx?version={fs.version}'
+    url = f'p9://{fs.username}@{fs.host}:{fs.port}/xxx?version={fs.version.value}'
     with fsspec.open(url, 'r') as f:
         data = f.read()
         assert data == 'This is a test content'
