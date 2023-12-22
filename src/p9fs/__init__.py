@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import pathlib
 import socket
 import stat
 import threading
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 
 import fsspec.spec
 
 from py9p import fid
 from py9p import py9p
+
+Version = py9p.Version
 
 
 def with_fid(m):
@@ -44,21 +47,37 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     port: int
     username: Optional[str]
     password: Optional[str]
-    msize: int = 8192
+    version: Version
+    verbose: bool
 
     def __init__(
-            self,
-            host: str,
-            port: int = py9p.PORT,
-            username: Optional[str] = None,
-            password: Optional[str] = None,
-            **kwargs,
+        self,
+        host: str,
+        port: int = py9p.PORT,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        version: Union[str, Version] = Version.v9P2000,
+        verbose: bool = False,
+        **kwargs,
     ):
-        """9P implementation of fsspec."""
+        """9P implementation of fsspec.
+
+        Args:
+            host: 9P server host
+            port: 9P server port
+            username: 9P username
+            password: 9P password
+            version: one of '9P2000', '9P2000.u', '9P2000.L', or Version
+        """
         self.host = host
         self.port = port
         self.username = username
         self.password = password
+        if isinstance(version, str):
+            self.version = Version.from_str(version)
+        else:
+            self.version = version
+        self.verbose = verbose
         self.fids = fid.FidCache()
         self._rlock = threading.RLock()
         super().__init__(**kwargs)
@@ -68,7 +87,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         s = socket.socket(socket.AF_INET)
         s.connect((self.host, self.port))
         credentials = py9p.Credentials(user=self.username, passwd=self.password)
-        self.client = py9p.Client(s, credentials=credentials)
+        self.client = py9p.Client(s, credentials=credentials, ver=self.version, chatty=self.verbose)
 
     def _mkdir(self, path, mode: int = 0o755):
         self._mknod(path, mode | stat.S_IFDIR)
@@ -77,30 +96,54 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     def _mknod(self, tfid, path, mode):
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts[:-1])
-        self.client._create(tfid, parts[-1], py9p.mode2plan(mode), 0)
+        if self.version == Version.v9P2000L:
+            if mode & stat.S_IFDIR:
+                self.client._mkdir(tfid, parts[-1], py9p.mode2plan(mode))
+            else:
+                self.client._lcreate(tfid, parts[-1], os.O_TRUNC | os.O_CREAT | os.O_WRONLY, mode, 0)
+        else:
+            self.client._create(tfid, parts[-1], py9p.mode2plan(mode), 0)
         self.client._clunk(tfid)
 
     @with_fid
     def _info(self, tfid, path):
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts)
-        response = self.client._stat(tfid)
-        self.client._clunk(tfid)
-        info = self._info_from_response(str(pathlib.Path(path).parent), response)
-        if len(info) != 1:
-            raise P9Error(f'stat returned {len(info)} items instead of 1')
-        return info[0]
+        if self.version == Version.v9P2000L:
+            response = self.client._getattr(tfid)
+            self.client._clunk(tfid)
+            return self._info_from_rgetattr(path, response)
+        else:
+            response = self.client._stat(tfid)
+            self.client._clunk(tfid)
+            info = self._info_from_rstat(str(pathlib.Path(path).parent), response)
+            if len(info) != 1:
+                raise P9Error(f'stat returned {len(info)} items instead of 1')
+            return info[0]
 
-    def _info_from_response(self, parent: str, response) -> List[Dict]:
+    def _info_from_rgetattr(self, path: str, response) -> Dict:
+        item = response.stat[0]
+        qid = response.qid
+        node_type = 'directory' if qid.type & py9p.QTDIR else 'file'
+        if node_type == 'directory' and not path.endswith('/'):
+            path = f'{path}/'
+        return {
+            'name': path,
+            'type': node_type,
+            'mode': py9p.mode2stat(item.mode),
+            'size': item.length,
+            'atime': item.atime,
+            'mtime': item.mtime,
+            'ctime': item.ctime,
+        }
+
+    def _info_from_rstat(self, parent: str, response) -> List[Dict]:
         """Transforms 9P stat response to a list of fsspec info"""
         items = []
         for item in response.stat:
             node_type = 'directory' if item.mode & py9p.DMDIR else 'file'
             name = item.name.decode('utf-8')
-            if parent.endswith('/'):
-                full_name = f'{parent}{name}'
-            else:
-                full_name = f'{parent}/{name}'
+            full_name = f'{parent}{name}' if parent.endswith('/') else f'{parent}/{name}'
             if node_type == 'directory':
                 full_name = f'{full_name}/'
             items.append(
@@ -117,12 +160,18 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     @with_fid
     def _unlink(self, tfid, path):
-        parts = pathlib.Path(path).parts
-        self.client._walk(self.client.ROOT, tfid, parts)
-        self.client._remove(tfid)
+        if self.version == Version.v9P2000L:
+            p = pathlib.Path(path)
+            self.client._walk(self.client.ROOT, tfid, p.parent.parts)
+            self.client._unlinkat(tfid, p.name)
+        else:
+            parts = pathlib.Path(path).parts
+            self.client._walk(self.client.ROOT, tfid, parts)
+            self.client._remove(tfid)
 
     @with_fid
     def _lsdir(self, tfid, path):
+        """Lists dir entries for 9P2000/9P2000.u"""
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts)
         try:
@@ -131,21 +180,47 @@ class P9FileSystem(fsspec.AbstractFileSystem):
             items = []
             offset = 0
             while True:
-                response = self.client._read(tfid, offset, self.msize)
+                response = self.client._read(tfid, offset, self.client.msize)
                 buffer = response.data
                 if len(buffer) == 0:
                     break
-                p9 = py9p.Marshal9P()
+                p9 = py9p.Marshal9P(dotu=self.version == Version.v9P2000u)
                 p9.setBuffer(buffer)
                 p9.buf.seek(0)
                 response = py9p.Fcall(py9p.Rstat)
                 p9.decstat(response.stat, 0)
-                items.extend(self._info_from_response(path, response))
+                items.extend(self._info_from_rstat(path, response))
                 offset += len(buffer)
             return items
         finally:
             self.client._clunk(tfid)
 
+    @with_fid
+    def _readdir(self, tfid, path):
+        """Lists dir entries for 9P2000.L"""
+        p = pathlib.Path(path)
+        self.client._walk(self.client.ROOT, tfid, p.parts)
+        try:
+            response = self.client._lopen(tfid, py9p.OREAD)
+            if response is None:
+                return []
+            items = []
+            offset = 0
+            while True:
+                response = self.client._readdir(tfid, offset, self.client.msize)
+                if response.count == 0:
+                    break
+                for entry in response.stat:
+                    if entry.name == '.' or entry.name == '..':
+                        continue
+                    name = str(p / entry.name)
+                    if entry.qid.type & py9p.QTDIR:
+                        name = f'{name}/'
+                    items.append(name)
+                offset = response.stat[-1].offset
+            return items
+        finally:
+            self.client._clunk(tfid)
 
     @with_fid
     def _open_fid(self, tfid, path, mode):
@@ -153,8 +228,14 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         try:
             parts = pathlib.Path(path).parts
             self.client._walk(self.client.ROOT, f.fid, parts)
-            fcall = self.client._open(f.fid, py9p.open2plan(mode))
-            f.iounit = fcall.iounit
+            if self.version == Version.v9P2000L:
+                fcall = self.client._lopen(f.fid, mode)
+            else:
+                fcall = self.client._open(f.fid, py9p.open2plan(mode))
+            if fcall.iounit == 0:
+                f.iounit = self.client.msize
+            else:
+                f.iounit = fcall.iounit
             return f
         except Exception as e:
             self.fids.release(f)
@@ -212,7 +293,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         try:
             return self._info(path=path)
         except py9p.RpcError as error:
-            if len(error.args) > 0 and error.args[0] == b'file not found':
+            if len(error.args) > 0 and (error.args[0] == b'file not found' or error.args[0] == errno.ENOENT):
                 raise P9FileNotFound(path) from error
             raise error
 
@@ -246,8 +327,12 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         if info['type'] != 'directory':
             return info if detail else info['name']
 
-        items = self._lsdir(path)
-        return items if detail else [item['name'] for item in items]
+        if self.version == Version.v9P2000L:
+            items = self._readdir(path)
+            return items if not detail else [self.info(item) for item in items]
+        else:
+            items = self._lsdir(path)
+            return items if detail else [item['name'] for item in items]
 
     def _rm(self, path):
         self._unlink(path)
@@ -269,9 +354,9 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         sf = self._open_fid(path1, os.O_RDONLY)
         df = self._open_fid(path2, os.O_WRONLY | os.O_TRUNC)
         try:
-            for i in range((src_info['size'] + self.msize - 1) // self.msize):
-                block = self._read(self.msize, i * self.msize, sf)
-                self._write(block, i * self.msize, df)
+            for i in range((src_info['size'] + self.client.msize - 1) // self.client.msize):
+                block = self._read(self.client.msize, i * self.client.msize, sf)
+                self._write(block, i * self.client.msize, df)
         finally:
             self._release_fid(sf)
             self._release_fid(df)
@@ -284,6 +369,9 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     def modified(self, path):
         return self.info(path)['mtime']
+
+    def created(self, path):
+        return self.info(path).get('ctime')
 
     def _open(
             self,

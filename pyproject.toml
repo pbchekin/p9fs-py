@@ -1,6 +1,6 @@
 [project]
 name = "p9fs"
-version = "0.0.1"
+version = "0.0.2"
 description = "9P implementation of Python fsspec"
 license = {file = "LICENSE"}
 readme = "README.md"
@@ -36,3 +36,5 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 include = ["p9fs*", "py9p*"]
 namespaces = false
+
+[tool.pytest.ini_options]

@@ -28,5 +28,18 @@ def pytest_addoption(parser):
         action="store",
         default="/tmp",
         type=str,
-        help=f"Directory exported by 9p server, default: /tmp",
+        help="Directory exported by 9p server, default: /tmp",
+    )
+    parser.addoption(
+        "--9p",
+        action="store",
+        default="9P2000",
+        type=str,
+        help="9P version: 9P2000 (default), 9P2000.u, 9P2000.L",
+    )
+    parser.addoption(
+        "--chatty",
+        action="store_true",
+        default=False,
+        help="Verbose 9P client",
     )

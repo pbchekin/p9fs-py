@@ -24,6 +24,7 @@
 9P protocol implementation as documented in plan9 intro(5) and <fcall.h>.
 """
 
+import enum
 import os
 import stat
 import sys
@@ -44,6 +45,24 @@ PORT = 564
 
 cmdName = {}
 
+# 9P2000.L
+
+Tlerror = 6
+Rlerror = 7
+Tlopen = 12
+Rlopen = 13
+Tlcreate = 14
+Rlcreate = 15
+Tgetattr = 24
+Rgetattr = 25
+Treaddir = 40
+Rreaddir = 41
+Tmkdir = 72
+Rmkdir = 73
+Tunlinkat = 76
+Runlinkat = 77
+
+# 9P2000 / 9P2000.u
 
 Tversion = 100
 Rversion = 101
@@ -74,12 +93,47 @@ Rstat = 125
 Twstat = 126
 Rwstat = 127
 
+GETATTR_MODE = 0x00000001
+GETATTR_NLINK = 0x00000002
+GETATTR_UID = 0x00000004
+GETATTR_GID = 0x00000008
+GETATTR_RDEV = 0x00000010
+GETATTR_ATIME = 0x00000020
+GETATTR_MTIME = 0x00000040
+GETATTR_CTIME = 0x00000080
+GETATTR_INO = 0x00000100
+GETATTR_SIZE = 0x00000200
+GETATTR_BLOCKS = 0x00000400
+GETATTR_BTIME = 0x00000800
+GETATTR_GEN = 0x00001000
+GETATTR_DATA_VERSION = 0x00002000
+GETATTR_BASIC = 0x000007ff  # Mask for fields up to BLOCKS
+GETATTR_ALL = 0x00003fff  # Mask for All fields above
+GETATTR_DEFAULT = GETATTR_MODE | GETATTR_ATIME | GETATTR_MTIME | GETATTR_CTIME | GETATTR_SIZE
+
 for i, k in dict(globals()).items():
     try:
         if (i[0] in ('T', 'R')) and isinstance(k, int):
             cmdName[k] = i
     except:
         pass
+
+
+class Version(str, enum.Enum):
+    v9P2000 = '9P2000'
+    v9P2000u = '9P2000.u'
+    v9P2000L = '9P2000.L'
+
+    @classmethod
+    def from_str(cls, value: str):
+        for v in cls:
+            if v.value == value:
+                return v
+        raise KeyError(f'unknown version {value}')
+
+    def to_bytes(self):
+        return self.encode('utf-8')
+
 
 version = b'9P2000'
 versionu = b'9P2000.u'
@@ -297,8 +351,7 @@ class Marshal9P(object):
             self.setBuffer(b"0000")
             self._checkType(fcall.type)
             if self.chatty:
-                print("-%d-> %s %s %s" % (fd.fileno(), cmdName[fcall.type], \
-                    fcall.tag, fcall.tostr()))
+                print("-%d-> %s %s %s" % (fd.fileno(), cmdName[fcall.type], fcall.tag, fcall.tostr()))
             self.enc(fcall)
             self.buf.seek(0)
             self.enc4(self.length)
@@ -310,7 +363,10 @@ class Marshal9P(object):
             size = struct.unpack("I", fd.read(4))[0]
             if size > 0xffffffff or size < 7:
                 raise Error("Bad message size: %d" % size)
-            self.setBuffer(fd.read(size - 4))
+            data = fd.read(size - 4)
+            if self.chatty:
+                print(f'recv {size=} {data[0]} ({cmdName.get(data[0], "N/A")})', ' '.join('{:02x}'.format(x) for x in data))
+            self.setBuffer(data)
             self.buf.seek(0)
             mtype, tag = self.decF("=BH", 3)
             self._checkType(mtype)
@@ -318,8 +374,7 @@ class Marshal9P(object):
             self.dec(fcall)
             # self._checkResid() -- FIXME: check the message residue
             if self.chatty:
-                print("<-%d- %s %s %s" % (fd.fileno(), cmdName[mtype],
-                        tag, fcall.tostr()))
+                print("<-%d- %s %s %s" % (fd.fileno(), cmdName[mtype], tag, fcall.tostr()))
             return fcall
 
     def encstat(self, stats, enclen=1):
@@ -368,6 +423,8 @@ class Marshal9P(object):
             self.encS(fcall.ename)
             if self.dotu:
                 self.encF("I", fcall.errno)
+        elif fcall.type == Rlerror:
+            self.encF("I", fcall.errno)
         elif fcall.type == Tflush:
             self.encF("H", fcall.oldtag)
         elif fcall.type == Tattach:
@@ -399,8 +456,7 @@ class Marshal9P(object):
             if self.dotu:
                 self.encS(fcall.extension)
         elif fcall.type == Tread:
-            self.encF("=IQI", fcall.fid, fcall.offset,
-                    fcall.count)
+            self.encF("=IQI", fcall.fid, fcall.offset, fcall.count)
         elif fcall.type == Rread:
             self.encD(fcall.data)
         elif fcall.type == Twrite:
@@ -415,6 +471,26 @@ class Marshal9P(object):
             if fcall.type == Twstat:
                 self.encF("I", fcall.fid)
             self.encstat(fcall.stat, 1)
+        elif fcall.type == Tmkdir:
+            self.encF("I", fcall.fid)
+            self.encS(fcall.name)
+            self.encF("I", fcall.mode)
+            self.encF("I", 0)
+        elif fcall.type == Tgetattr:
+            self.encF("I", fcall.fid)
+            self.enc8(GETATTR_DEFAULT)  # Mask for all fields
+        elif fcall.type == Tunlinkat:
+            self.encF("I", fcall.fid)
+            self.encS(fcall.name)
+            self.enc4(fcall.flags)
+        elif fcall.type == Treaddir:
+            self.encF("=IQI", fcall.fid, fcall.offset, fcall.count)
+        elif fcall.type == Tlopen:
+            self.encF("=II", fcall.fid, fcall.flags)
+        elif fcall.type == Tlcreate:
+            self.encF("I", fcall.fid)
+            self.encS(fcall.name)
+            self.encF("=III", fcall.flags, fcall.mode, fcall.gid)
 
     def decstat(self, stats, enclen=0):
         if enclen:
@@ -422,15 +498,16 @@ class Marshal9P(object):
             self.buf.read(2)
         while self.buf.tell() < self.length:
             self.buf.read(2)
-
             s = Dir(self.dotu)
-            (s.type,
-                    s.dev,
-                    typ, vers, path,
-                    s.mode,
-                    s.atime,
-                    s.mtime,
-                    s.length) = self.decF("=HIBIQIIIQ", 39)
+            (
+                s.type,
+                s.dev,
+                typ, vers, path,
+                s.mode,
+                s.atime,
+                s.mtime,
+                s.length,
+            ) = self.decF("=HIBIQIIIQ", 39)
             s.qid = Qid(typ, vers, path)
             s.name = self.decS()     # name
             s.uid = self.decS()      # uid
@@ -438,10 +515,38 @@ class Marshal9P(object):
             s.muid = self.decS()     # muid
             if self.dotu:
                 s.extension = self.decS()
-                (s.uidnum,
-                        s.gidnum,
-                        s.muidnum) = self.decF("=III", 12)
+                (
+                    s.uidnum,
+                    s.gidnum,
+                    s.muidnum
+                ) = self.decF("=III", 12)
             stats.append(s)
+
+    def decstatL(self, stats):
+        """Decode stat for 9P2000.L"""
+        s = Dir()
+        s.mode = self.dec4()
+        s.uid = self.dec4()
+        s.gid = self.dec4()
+        self.dec8()  # nlink
+        self.dec8()  # rdev
+        s.length = self.dec8()
+        self.dec8()  # blksize
+        self.dec8()  # blocks
+        s.atime = (self.dec8(), self.dec8())
+        s.mtime = (self.dec8(), self.dec8())
+        s.ctime = (self.dec8(), self.dec8())
+        stats.append(s)
+
+    def decdirentry(self, stats, count):
+        """Decode DirEntry returned by Rreaddir for 9P2000.L"""
+        while self.buf.tell() < self.length:
+            entry = DirEntry()
+            entry.qid = self.decQ()
+            entry.offset = self.dec8()
+            entry.type = self.dec1()
+            entry.name = self.decS().decode('utf-8')
+            stats.append(entry)
 
     def dec(self, fcall):
         if fcall.type in (Tversion, Rversion):
@@ -459,6 +564,8 @@ class Marshal9P(object):
             fcall.ename = self.decS()
             if self.dotu:
                 fcall.errno = self.dec4()
+        elif fcall.type == Rlerror:
+            fcall.errno = self.dec4()
         elif fcall.type == Tflush:
             fcall.oldtag = self.dec2()
         elif fcall.type == Tattach:
@@ -510,6 +617,21 @@ class Marshal9P(object):
             if fcall.type == Twstat:
                 fcall.fid = self.dec4()
             self.decstat(fcall.stat, 1)
+        elif fcall.type == Rmkdir:
+            fcall.qid = self.decQ()
+        elif fcall.type == Rgetattr:
+            self.dec8()  # valid mask
+            fcall.qid = self.decQ()
+            self.decstatL(fcall.stat)
+        elif fcall.type == Rreaddir:
+            fcall.count = self.dec4()
+            self.decdirentry(fcall.stat, fcall.count)
+        elif fcall.type == Rlopen:
+            fcall.qid = self.decQ()
+            fcall.iounit = self.dec4()
+        elif fcall.type == Rlcreate:
+            fcall.qid = self.decQ()
+            fcall.iounit = self.dec4()
 
         return fcall
 
@@ -735,6 +857,13 @@ class Fid(object):
         self.path = path
 
         pool[fid] = self
+
+
+class DirEntry:
+    qid: Qid
+    offset: int
+    type: int
+    name: str
 
 
 class Dir(object):
@@ -1447,13 +1576,24 @@ class Client(object):
 
     path = ''  # for 'getwd' equivalent
 
-    def __init__(self, fd, credentials, authsrv=None, chatty=0, dotu=0,
-            msize=8192):
+    def __init__(
+            self,
+            fd,
+            credentials,
+            authsrv=None,
+            chatty=0,
+            ver: Version = Version.v9P2000,
+            msize=8192,
+    ):
         self.credentials = credentials
-        self.dotu = dotu
+        self.version = ver
         self.msize = msize
-        self.fd = Sock(fd, dotu, chatty)
+        self.fd = Sock(fd, self.dotu, chatty)
         self.login(authsrv, credentials)
+
+    @property
+    def dotu(self):
+        return self.version == Version.v9P2000u or self.version == Version.v9P2000L
 
     def _rpc(self, fcall):
         if fcall.type == Tversion:
@@ -1463,7 +1603,7 @@ class Client(object):
             ifcall = self.fd.recv()
         except (KeyboardInterrupt, Exception):
             # try to flush the operation, then rethrow exception
-            if fcall.type != Tflush:
+            if fcall.type != Tflush and self.version != Version.v9P2000L:
                 try:
                     self._flush(fcall.tag, fcall.tag + 1)
                 except Exception:
@@ -1473,6 +1613,8 @@ class Client(object):
             raise RpcError("invalid tag received")
         if ifcall.type == Rerror:
             raise RpcError(ifcall.ename)
+        if ifcall.type == Rlerror:
+            raise RpcError(ifcall.errno)
         if ifcall.type != fcall.type + 1:
             raise ClientError("incorrect reply from server: %r" %
                     [fcall.type, fcall.tag])
@@ -1517,6 +1659,12 @@ class Client(object):
         fcall.mode = mode
         return self._rpc(fcall)
 
+    def _lopen(self, fid, mode):
+        fcall = Fcall(Tlopen)
+        fcall.fid = fid
+        fcall.flags = mode
+        return self._rpc(fcall)
+
     def _create(self, fid, name, perm, mode, extension=b""):
         fcall = Fcall(Tcreate)
         fcall.fid = fid
@@ -1526,12 +1674,37 @@ class Client(object):
         fcall.extension = extension
         return self._rpc(fcall)
 
+    def _lcreate(self, fid, name, flags, mode, gid):
+        fcall = Fcall(Tlcreate)
+        fcall.fid = fid
+        fcall.name = name
+        fcall.flags = flags
+        fcall.mode = mode
+        fcall.gid = gid
+        return self._rpc(fcall)
+
+    def _mkdir(self, fid, name, mode):
+        fcall = Fcall(Tmkdir)
+        fcall.fid = fid
+        fcall.name = name
+        fcall.mode = mode
+        return self._rpc(fcall)
+
     def _read(self, fid, off, count):
         fcall = Fcall(Tread)
         fcall.fid = fid
         fcall.offset = off
         if count > self.msize - IOHDRSZ:
             count = self.msize - IOHDRSZ
+        fcall.count = count
+        return self._rpc(fcall)
+
+    def _readdir(self, fid, offset, count):
+        fcall = Fcall(Treaddir)
+        fcall.fid = fid
+        fcall.offset = offset
+        if count > self.msize - 22:
+            count = self.msize - 22
         fcall.count = count
         return self._rpc(fcall)
 
@@ -1552,8 +1725,20 @@ class Client(object):
         fcall.fid = fid
         return self._rpc(fcall)
 
+    def _unlinkat(self, fid, name, flags=0):
+        fcall = Fcall(Tunlinkat)
+        fcall.fid = fid
+        fcall.name = name
+        fcall.flags = flags
+        return self._rpc(fcall)
+
     def _stat(self, fid):
         fcall = Fcall(Tstat)
+        fcall.fid = fid
+        return self._rpc(fcall)
+
+    def _getattr(self, fid):
+        fcall = Fcall(Tgetattr)
         fcall.fid = fid
         return self._rpc(fcall)
 
@@ -1574,20 +1759,20 @@ class Client(object):
         self.fd.close()
 
     def login(self, authsrv, credentials):
-        if self.dotu:
-            ver = versionu
-        else:
-            ver = version
+        ver = self.version.to_bytes()
         fcall = self._version(self.msize, ver)
         self.msize = fcall.msize
         if fcall.version != ver:
             raise VersionError("version mismatch: %r" % fcall.version)
 
-        fcall.afid = self.AFID
-        try:
-            rfcall = self._auth(fcall.afid, credentials.user, b'')
-        except RpcError as e:
+        if self.version == Version.v9P2000L:
             fcall.afid = NOFID
+        else:
+            fcall.afid = self.AFID
+            try:
+                rfcall = self._auth(fcall.afid, credentials.user, b'')
+            except RpcError as e:
+                fcall.afid = NOFID
 
         if fcall.afid != NOFID:
             fcall.aqid = rfcall.aqid
@@ -1598,8 +1783,7 @@ class Client(object):
                 import pki
                 pki.clientAuth(self, fcall, credentials)
             else:
-                raise ClientError('unknown authentication method: %s' %
-                        credentials.authmode)
+                raise ClientError('unknown authentication method: %s' % credentials.authmode)
 
         self._attach(self.ROOT, fcall.afid, credentials.user, b'')
         if fcall.afid != NOFID:
