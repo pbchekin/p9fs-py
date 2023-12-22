@@ -123,7 +123,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         item = response.stat[0]
         qid = response.qid
         node_type = 'directory' if qid.type & py9p.QTDIR else 'file'
-        if node_type == 'directory' and path.endswith('/'):
+        if node_type == 'directory' and not path.endswith('/'):
             path = f'{path}/'
         return {
             'name': path,
@@ -158,9 +158,14 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     @with_fid
     def _unlink(self, tfid, path):
-        parts = pathlib.Path(path).parts
-        self.client._walk(self.client.ROOT, tfid, parts)
-        self.client._remove(tfid)
+        if self.version == Version.v9P2000L:
+            p = pathlib.Path(path)
+            self.client._walk(self.client.ROOT, tfid, p.parent.parts)
+            self.client._unlinkat(tfid, p.name)
+        else:
+            parts = pathlib.Path(path).parts
+            self.client._walk(self.client.ROOT, tfid, parts)
+            self.client._remove(tfid)
 
     @with_fid
     def _lsdir(self, tfid, path):

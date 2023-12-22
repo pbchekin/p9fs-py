@@ -10,7 +10,10 @@ Supported protocols:
 
 Supported servers:
 
-* 
+* py9p
 * unpfs
+
+TODO:
+* `atime`, `mtime`, `ctime`
 
 This package contains a fork of py9p (https://github.com/svinota/py9p), which seems no longer maintained.

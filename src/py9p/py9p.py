@@ -53,7 +53,8 @@ Tgetattr = 24
 Rgetattr = 25
 Tmkdir = 72
 Rmkdir = 73
-
+Tunlinkat = 76
+Runlinkat = 77
 
 # 9P2000 / 9P2000.u
 
@@ -473,6 +474,10 @@ class Marshal9P(object):
         elif fcall.type == Tgetattr:
             self.encF("I", fcall.fid)
             self.enc8(GETATTR_DEFAULT)  # Mask for all fields
+        elif fcall.type == Tunlinkat:
+            self.encF("I", fcall.fid)
+            self.encS(fcall.name)
+            self.enc4(fcall.flags)
 
     def decstat(self, stats, enclen=0):
         if enclen:
@@ -1655,6 +1660,13 @@ class Client(object):
     def _remove(self, fid):
         fcall = Fcall(Tremove)
         fcall.fid = fid
+        return self._rpc(fcall)
+
+    def _unlinkat(self, fid, name, flags=0):
+        fcall = Fcall(Tunlinkat)
+        fcall.fid = fid
+        fcall.name = name
+        fcall.flags = flags
         return self._rpc(fcall)
 
     def _stat(self, fid):
