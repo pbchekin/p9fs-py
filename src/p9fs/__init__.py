@@ -107,12 +107,33 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     def _info(self, tfid, path):
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts)
-        response = self.client._stat(tfid)
-        self.client._clunk(tfid)
-        info = self._info_from_rstat(str(pathlib.Path(path).parent), response)
-        if len(info) != 1:
-            raise P9Error(f'stat returned {len(info)} items instead of 1')
-        return info[0]
+        if self.version == Version.v9P2000L:
+            response = self.client._getattr(tfid)
+            self.client._clunk(tfid)
+            return self._info_from_rgetattr(path, response)
+        else:
+            response = self.client._stat(tfid)
+            self.client._clunk(tfid)
+            info = self._info_from_rstat(str(pathlib.Path(path).parent), response)
+            if len(info) != 1:
+                raise P9Error(f'stat returned {len(info)} items instead of 1')
+            return info[0]
+
+    def _info_from_rgetattr(self, path: str, response) -> Dict:
+        item = response.stat[0]
+        qid = response.qid
+        node_type = 'directory' if qid.type & py9p.QTDIR else 'file'
+        if node_type == 'directory' and path.endswith('/'):
+            path = f'{path}/'
+        return {
+            'name': path,
+            'type': node_type,
+            'mode': py9p.mode2stat(item.mode),
+            'size': item.length,
+            'atime': item.atime,
+            'mtime': item.mtime,
+            'ctime': item.ctime,
+        }
 
     def _info_from_rstat(self, parent: str, response) -> List[Dict]:
         """Transforms 9P stat response to a list of fsspec info"""
@@ -120,10 +141,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         for item in response.stat:
             node_type = 'directory' if item.mode & py9p.DMDIR else 'file'
             name = item.name.decode('utf-8')
-            if parent.endswith('/'):
-                full_name = f'{parent}{name}'
-            else:
-                full_name = f'{parent}/{name}'
+            full_name = f'{parent}{name}' if parent.endswith('/') else f'{parent}/{name}'
             if node_type == 'directory':
                 full_name = f'{full_name}/'
             items.append(
@@ -307,6 +325,9 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     def modified(self, path):
         return self.info(path)['mtime']
+
+    def created(self, path):
+        return self.info(path).get('ctime')
 
     def _open(
             self,

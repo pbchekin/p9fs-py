@@ -49,8 +49,8 @@ cmdName = {}
 
 Tlerror = 6
 Rlerror = 7
-Rgetattr = 24
-Tgetattr = 25
+Tgetattr = 24
+Rgetattr = 25
 Tmkdir = 72
 Rmkdir = 73
 
@@ -102,6 +102,7 @@ GETATTR_GEN = 0x00001000
 GETATTR_DATA_VERSION = 0x00002000
 GETATTR_BASIC = 0x000007ff  # Mask for fields up to BLOCKS
 GETATTR_ALL = 0x00003fff  # Mask for All fields above
+GETATTR_DEFAULT = GETATTR_MODE | GETATTR_ATIME | GETATTR_MTIME | GETATTR_CTIME | GETATTR_SIZE
 
 for i, k in dict(globals()).items():
     try:
@@ -471,7 +472,7 @@ class Marshal9P(object):
             self.encF("I", 0)
         elif fcall.type == Tgetattr:
             self.encF("I", fcall.fid)
-            self.enc8()  # Mask for all fields
+            self.enc8(GETATTR_DEFAULT)  # Mask for all fields
 
     def decstat(self, stats, enclen=0):
         if enclen:
@@ -479,15 +480,16 @@ class Marshal9P(object):
             self.buf.read(2)
         while self.buf.tell() < self.length:
             self.buf.read(2)
-
             s = Dir(self.dotu)
-            (s.type,
-                    s.dev,
-                    typ, vers, path,
-                    s.mode,
-                    s.atime,
-                    s.mtime,
-                    s.length) = self.decF("=HIBIQIIIQ", 39)
+            (
+                s.type,
+                s.dev,
+                typ, vers, path,
+                s.mode,
+                s.atime,
+                s.mtime,
+                s.length,
+            ) = self.decF("=HIBIQIIIQ", 39)
             s.qid = Qid(typ, vers, path)
             s.name = self.decS()     # name
             s.uid = self.decS()      # uid
@@ -495,10 +497,28 @@ class Marshal9P(object):
             s.muid = self.decS()     # muid
             if self.dotu:
                 s.extension = self.decS()
-                (s.uidnum,
-                        s.gidnum,
-                        s.muidnum) = self.decF("=III", 12)
+                (
+                    s.uidnum,
+                    s.gidnum,
+                    s.muidnum
+                ) = self.decF("=III", 12)
             stats.append(s)
+
+    def decstatL(self, stats):
+        """Decode stat for 9P2000.L"""
+        s = Dir()
+        s.mode = self.dec4()
+        s.uid = self.dec4()
+        s.gid = self.dec4()
+        self.dec8()  # nlink
+        self.dec8()  # rdev
+        s.length = self.dec8()
+        self.dec8()  # blksize
+        self.dec8()  # blocks
+        s.atime = (self.dec8(), self.dec8())
+        s.mtime = (self.dec8(), self.dec8())
+        s.ctime = (self.dec8(), self.dec8())
+        stats.append(s)
 
     def dec(self, fcall):
         if fcall.type in (Tversion, Rversion):
@@ -574,7 +594,7 @@ class Marshal9P(object):
         elif fcall.type == Rgetattr:
             self.dec8()  # valid mask
             fcall.qid = self.decQ()
-            self.decstat(fcall.stat, 1)
+            self.decstatL(fcall.stat)
 
         return fcall
 
@@ -1639,6 +1659,11 @@ class Client(object):
 
     def _stat(self, fid):
         fcall = Fcall(Tstat)
+        fcall.fid = fid
+        return self._rpc(fcall)
+
+    def _getattr(self, fid):
+        fcall = Fcall(Tgetattr)
         fcall.fid = fid
         return self._rpc(fcall)
 
