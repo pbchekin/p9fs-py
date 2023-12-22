@@ -24,7 +24,11 @@ jobs:
           repository: pfpacket/rust-9p
 
       - name: Run tests
-        run: ls -l
+        run: |
+          pwd
+          ls -l
+          echo $GITHUB_WORKSPACE
+          ls -l $GITHUB_WORKSPACE
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
