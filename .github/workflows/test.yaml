@@ -32,9 +32,8 @@ jobs:
         run: |
           cd rust-9p/example/unpfs/
           cargo build --release
-          echo $PATH
-          mkdir ~/bin
-          ln -s $PWD/target/release/unpfs ~/bin/
+          mkdir -p ~/.local/bin
+          ln -s $PWD/target/release/unpfs ~/.local/bin
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4

@@ -66,7 +66,7 @@ function stop_py9p {
 
 function run_unpfs {
   local exported_dir="$1"
-  unpfs 'tcp!0.0.0.0!1234' "$exported_dir" &> $UNPFS_LOG &
+  ${UNPFS:-unpfs} 'tcp!0.0.0.0!1234' "$exported_dir" &> $UNPFS_LOG &
   echo $! > $UNPFS_PID
   wait_for_server
 }
