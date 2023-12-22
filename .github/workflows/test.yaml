@@ -1,6 +1,10 @@
 name: Test
 
-on: [pull_request]
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   run-tests:
@@ -23,7 +27,7 @@ jobs:
         with:
           repository: pfpacket/rust-9p
 
-      - name: Run tests
+      - name: Show directory structure
         run: |
           pwd
           ls -l
