@@ -225,8 +225,14 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         try:
             parts = pathlib.Path(path).parts
             self.client._walk(self.client.ROOT, f.fid, parts)
-            fcall = self.client._open(f.fid, py9p.open2plan(mode))
-            f.iounit = fcall.iounit
+            if self.version == Version.v9P2000L:
+                fcall = self.client._lopen(f.fid, mode)
+            else:
+                fcall = self.client._open(f.fid, py9p.open2plan(mode))
+            if fcall.iounit == 0:
+                f.iounit = self.client.msize
+            else:
+                f.iounit = fcall.iounit
             return f
         except Exception as e:
             self.fids.release(f)
