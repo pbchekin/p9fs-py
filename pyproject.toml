@@ -28,6 +28,9 @@ tests = [
     "pytest",
 ]
 
+[project.entry-points."fsspec.specs"]
+p9 = "p9fs.P9FileSystem"
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"

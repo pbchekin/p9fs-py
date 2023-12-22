@@ -11,6 +11,7 @@ import threading
 from typing import Optional, List, Dict, Union
 
 import fsspec.spec
+from fsspec import utils
 
 from py9p import fid
 from py9p import py9p
@@ -45,7 +46,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     host: str
     port: int
-    username: Optional[str]
+    username: str
     password: Optional[str]
     version: Version
     verbose: bool
@@ -53,10 +54,10 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     def __init__(
         self,
         host: str,
-        port: int = py9p.PORT,
-        username: Optional[str] = None,
+        port: int,
+        username: str,
         password: Optional[str] = None,
-        version: Union[str, Version] = Version.v9P2000,
+        version: Union[str, Version] = Version.v9P2000L,
         verbose: bool = False,
         **kwargs,
     ):
@@ -69,6 +70,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
             password: 9P password
             version: one of '9P2000', '9P2000.u', '9P2000.L', or Version
         """
+        super().__init__(**kwargs)
         self.host = host
         self.port = port
         self.username = username
@@ -82,6 +84,25 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         self._rlock = threading.RLock()
         super().__init__(**kwargs)
         self._connect()
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        path = utils.infer_storage_options(path)["path"]
+        return path.lstrip('/')
+
+    @staticmethod
+    def _get_kwargs_from_urls(path):
+        # Example: 9p://nobody@host:port/directory/file.csv
+        options = utils.infer_storage_options(path)
+        options.pop('path', None)
+        options.pop('protocol', None)
+        url_query = options.pop('url_query')
+        if url_query:
+            for item in url_query.split('&'):
+                key, value = item.split('=')
+                options[key] = value
+        print(f'{options=}')
+        return options
 
     def _connect(self):
         s = socket.socket(socket.AF_INET)
