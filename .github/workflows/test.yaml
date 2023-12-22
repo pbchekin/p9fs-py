@@ -26,13 +26,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pfpacket/rust-9p
+          path: rust-9p
 
-      - name: Show directory structure
+      - name: Build unpfs
         run: |
-          pwd
-          ls -l
-          echo $GITHUB_WORKSPACE
-          ls -l $GITHUB_WORKSPACE
+          cd rust-9p/example/unpfs/
+          cargo build --release
+          echo $PATH
+          mkdir ~/bin
+          ln -s $PWD/target/release/unpfs ~/bin/
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
