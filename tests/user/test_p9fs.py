@@ -150,5 +150,5 @@ def test_copy(fs, exported_path):
     if fs.isfile('yyy'):
         fs.rm('yyy')
 
-    fs.copy('test_copy/yyy', '')
+    fs.copy('test_copy/yyy', '.')
     assert fs.isfile('yyy')

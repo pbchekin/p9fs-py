@@ -97,7 +97,10 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts[:-1])
         if self.version == Version.v9P2000L:
-            self.client._mkdir(tfid, parts[-1], py9p.mode2plan(mode))
+            if mode & stat.S_IFDIR:
+                self.client._mkdir(tfid, parts[-1], py9p.mode2plan(mode))
+            else:
+                self.client._lcreate(tfid, parts[-1], os.O_TRUNC | os.O_CREAT | os.O_WRONLY, mode, 0)
         else:
             self.client._create(tfid, parts[-1], py9p.mode2plan(mode), 0)
         self.client._clunk(tfid)

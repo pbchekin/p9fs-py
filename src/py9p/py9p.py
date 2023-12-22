@@ -51,6 +51,8 @@ Tlerror = 6
 Rlerror = 7
 Tlopen = 12
 Rlopen = 13
+Tlcreate = 14
+Rlcreate = 15
 Tgetattr = 24
 Rgetattr = 25
 Treaddir = 40
@@ -485,6 +487,10 @@ class Marshal9P(object):
             self.encF("=IQI", fcall.fid, fcall.offset, fcall.count)
         elif fcall.type == Tlopen:
             self.encF("=II", fcall.fid, fcall.flags)
+        elif fcall.type == Tlcreate:
+            self.encF("I", fcall.fid)
+            self.encS(fcall.name)
+            self.encF("=III", fcall.flags, fcall.mode, fcall.gid)
 
     def decstat(self, stats, enclen=0):
         if enclen:
@@ -621,6 +627,9 @@ class Marshal9P(object):
             fcall.count = self.dec4()
             self.decdirentry(fcall.stat, fcall.count)
         elif fcall.type == Rlopen:
+            fcall.qid = self.decQ()
+            fcall.iounit = self.dec4()
+        elif fcall.type == Rlcreate:
             fcall.qid = self.decQ()
             fcall.iounit = self.dec4()
 
@@ -1663,6 +1672,15 @@ class Client(object):
         fcall.perm = perm
         fcall.mode = mode
         fcall.extension = extension
+        return self._rpc(fcall)
+
+    def _lcreate(self, fid, name, flags, mode, gid):
+        fcall = Fcall(Tlcreate)
+        fcall.fid = fid
+        fcall.name = name
+        fcall.flags = flags
+        fcall.mode = mode
+        fcall.gid = gid
         return self._rpc(fcall)
 
     def _mkdir(self, fid, name, mode):
