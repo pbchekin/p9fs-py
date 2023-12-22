@@ -26,6 +26,8 @@ def fs(pytestconfig):
         host=pytestconfig.getoption('--host'),
         port=pytestconfig.getoption('--port'),
         username=pytestconfig.getoption('--user'),
+        version=pytestconfig.getoption('--9p'),
+        verbose=pytestconfig.getoption('--chatty'),
     )
 
 

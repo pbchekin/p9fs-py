@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import pathlib
 import socket
 import stat
 import threading
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 
 import fsspec.spec
 
 from py9p import fid
 from py9p import py9p
+
+Version = py9p.Version
 
 
 def with_fid(m):
@@ -44,21 +47,38 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     port: int
     username: Optional[str]
     password: Optional[str]
+    version: Version
+    verbose: bool
     msize: int = 8192
 
     def __init__(
-            self,
-            host: str,
-            port: int = py9p.PORT,
-            username: Optional[str] = None,
-            password: Optional[str] = None,
-            **kwargs,
+        self,
+        host: str,
+        port: int = py9p.PORT,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        version: Union[str, Version] = Version.v9P2000,
+        verbose: bool = False,
+        **kwargs,
     ):
-        """9P implementation of fsspec."""
+        """9P implementation of fsspec.
+
+        Args:
+            host: 9P server host
+            port: 9P server port
+            username: 9P username
+            password: 9P password
+            version: one of '9P2000', '9P2000.u', '9P2000.L', or Version
+        """
         self.host = host
         self.port = port
         self.username = username
         self.password = password
+        if isinstance(version, str):
+            self.version = Version.from_str(version)
+        else:
+            self.version = version
+        self.verbose = verbose
         self.fids = fid.FidCache()
         self._rlock = threading.RLock()
         super().__init__(**kwargs)
@@ -68,7 +88,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         s = socket.socket(socket.AF_INET)
         s.connect((self.host, self.port))
         credentials = py9p.Credentials(user=self.username, passwd=self.password)
-        self.client = py9p.Client(s, credentials=credentials)
+        self.client = py9p.Client(s, credentials=credentials, ver=self.version, chatty=self.verbose)
 
     def _mkdir(self, path, mode: int = 0o755):
         self._mknod(path, mode | stat.S_IFDIR)
@@ -77,7 +97,10 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     def _mknod(self, tfid, path, mode):
         parts = pathlib.Path(path).parts
         self.client._walk(self.client.ROOT, tfid, parts[:-1])
-        self.client._create(tfid, parts[-1], py9p.mode2plan(mode), 0)
+        if self.version == Version.v9P2000L:
+            self.client._mkdir(tfid, parts[-1], py9p.mode2plan(mode))
+        else:
+            self.client._create(tfid, parts[-1], py9p.mode2plan(mode), 0)
         self.client._clunk(tfid)
 
     @with_fid
@@ -86,12 +109,12 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         self.client._walk(self.client.ROOT, tfid, parts)
         response = self.client._stat(tfid)
         self.client._clunk(tfid)
-        info = self._info_from_response(str(pathlib.Path(path).parent), response)
+        info = self._info_from_rstat(str(pathlib.Path(path).parent), response)
         if len(info) != 1:
             raise P9Error(f'stat returned {len(info)} items instead of 1')
         return info[0]
 
-    def _info_from_response(self, parent: str, response) -> List[Dict]:
+    def _info_from_rstat(self, parent: str, response) -> List[Dict]:
         """Transforms 9P stat response to a list of fsspec info"""
         items = []
         for item in response.stat:
@@ -135,12 +158,12 @@ class P9FileSystem(fsspec.AbstractFileSystem):
                 buffer = response.data
                 if len(buffer) == 0:
                     break
-                p9 = py9p.Marshal9P()
+                p9 = py9p.Marshal9P(dotu=self.version == Version.v9P2000u)
                 p9.setBuffer(buffer)
                 p9.buf.seek(0)
                 response = py9p.Fcall(py9p.Rstat)
                 p9.decstat(response.stat, 0)
-                items.extend(self._info_from_response(path, response))
+                items.extend(self._info_from_rstat(path, response))
                 offset += len(buffer)
             return items
         finally:
@@ -212,7 +235,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         try:
             return self._info(path=path)
         except py9p.RpcError as error:
-            if len(error.args) > 0 and error.args[0] == b'file not found':
+            if len(error.args) > 0 and (error.args[0] == b'file not found' or error.args[0] == errno.ENOENT):
                 raise P9FileNotFound(path) from error
             raise error
 
