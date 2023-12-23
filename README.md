@@ -8,10 +8,11 @@ Supported protocols:
 * [9P2000.u](https://ericvh.github.io/9p-rfc/rfc9p2000.u.html)
 * [9P2000.L](https://github.com/chaos/diod/blob/master/protocol.md)
 
-Supported servers:
+Tested with the following servers:
 
 * [py9p](https://github.com/pbchekin/p9fs-py/blob/main/src/py9p/__main__.py)
 * [unpfs](https://github.com/pfpacket/rust-9p/blob/master/README.md#unpfs)
+* [diod](https://github.com/chaos/diod)
 
 ## Examples
 
