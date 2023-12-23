@@ -43,3 +43,10 @@ def pytest_addoption(parser):
         default=False,
         help="Verbose 9P client",
     )
+    parser.addoption(
+        "--aname",
+        action="store",
+        default="",
+        type=str,
+        help="Name to attach to, required for diod",
+    )

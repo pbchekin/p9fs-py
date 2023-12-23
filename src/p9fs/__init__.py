@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import io
 import os
 import pathlib
 import socket
@@ -44,13 +45,6 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     protocol = '9p'
 
-    host: str
-    port: int
-    username: str
-    password: Optional[str]
-    version: Version
-    verbose: bool
-
     def __init__(
         self,
         host: str,
@@ -59,6 +53,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         password: Optional[str] = None,
         version: Union[str, Version] = Version.v9P2000L,
         verbose: bool = False,
+        aname: str = '',
         **kwargs,
     ):
         """9P implementation of fsspec.
@@ -80,6 +75,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         else:
             self.version = version
         self.verbose = verbose
+        self.aname = aname
         self.fids = fid.FidCache()
         self._rlock = threading.RLock()
         super().__init__(**kwargs)
@@ -107,7 +103,13 @@ class P9FileSystem(fsspec.AbstractFileSystem):
         s = socket.socket(socket.AF_INET)
         s.connect((self.host, self.port))
         credentials = py9p.Credentials(user=self.username, passwd=self.password)
-        self.client = py9p.Client(s, credentials=credentials, ver=self.version, chatty=self.verbose)
+        self.client = py9p.Client(
+            s,
+            credentials=credentials,
+            ver=self.version,
+            chatty=self.verbose,
+            aname=self.aname,
+        )
 
     def _mkdir(self, path, mode: int = 0o755):
         self._mknod(path, mode | stat.S_IFDIR)
@@ -128,7 +130,12 @@ class P9FileSystem(fsspec.AbstractFileSystem):
     @with_fid
     def _info(self, tfid, path):
         parts = pathlib.Path(path).parts
-        self.client._walk(self.client.ROOT, tfid, parts)
+        response = self.client._walk(self.client.ROOT, tfid, parts)
+        # canonical 9p implementation and specifically diod do not return an error if walk is
+        # unsuccessful. Instead, they return all qids up to last existing component in the path.
+        # The only way to check if path exists is compare the number of qids in the response.
+        if len(response.wqid) != len(parts):
+            raise P9FileNotFound(path)
         if self.version == Version.v9P2000L:
             response = self.client._getattr(tfid)
             self.client._clunk(tfid)
@@ -180,7 +187,9 @@ class P9FileSystem(fsspec.AbstractFileSystem):
 
     @with_fid
     def _unlink(self, tfid, path):
-        if self.version == Version.v9P2000L:
+        # TODO: diod does not support unlinkat, remove should be used instead.
+        # Currently the only way to identify diod is to check if aname is set.
+        if self.version == Version.v9P2000L and not self.aname:
             p = pathlib.Path(path)
             self.client._walk(self.client.ROOT, tfid, p.parent.parts)
             self.client._unlinkat(tfid, p.name)
@@ -227,7 +236,7 @@ class P9FileSystem(fsspec.AbstractFileSystem):
             items = []
             offset = 0
             while True:
-                response = self.client._readdir(tfid, offset, self.client.msize)
+                response = self.client._readdir(tfid, offset, self.client.msize - py9p.IOHDRSZ)
                 if response.count == 0:
                     break
                 for entry in response.stat:
@@ -433,7 +442,14 @@ class P9BufferedFile(fsspec.spec.AbstractBufferedFile):
                 self.closed = True
                 raise
 
-        self.fs._write(self.buffer.getvalue(), self.offset, self._f)
+        data = self.buffer.getvalue()
+        size = len(data)
+        offset = 0
+        msize = self.fs.client.msize - py9p.IOHDRSZ
+        while offset < size - 1:
+            asize = min(msize, size - offset)
+            self.fs._write(data[offset:offset + asize], self.offset + offset, self._f)
+            offset += asize
         return True
 
     def _initiate_upload(self):
@@ -446,7 +462,13 @@ class P9BufferedFile(fsspec.spec.AbstractBufferedFile):
         """Get the specified set of bytes from remote"""
         if self._f is None:
             self._f = self.fs._open_fid(self.path, os.O_RDONLY)
-        return self.fs._read(end - start + 1, start, self._f)
+        data = io.BytesIO()
+        offset = start
+        msize = self.fs.client.msize - py9p.IOHDRSZ
+        while offset < end:
+            asize = min(msize, end - offset + 1)
+            offset += data.write(self.fs._read(asize, offset, self._f))
+        return data.getvalue()
 
     def close(self):
         """Close file"""

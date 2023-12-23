@@ -13,6 +13,9 @@ PY9P_LOG=/tmp/py9p.log
 UNPFS_PID=/tmp/unpfs.pid
 UNPFS_LOG=/tmp/unpfs.log
 
+DIOD_PID=/tmp/diod.pid
+DIOD_LOG=/tmp/diod.log
+
 export PYTHONUNBUFFERED=1
 
 function mymktempdir {
@@ -78,12 +81,29 @@ function stop_unpfs {
   fi
 }
 
+function run_diod {
+  local exported_dir="$1"
+  ${DIOD:-diod} -f -l 0.0.0.0:1234 -e "$exported_dir" -d3 -n &> $DIOD_LOG &
+  echo $! > $DIOD_PID
+  wait_for_server
+}
+
+function stop_diod {
+  if [[ -f $DIOD_PID ]]; then
+    kill "$(<$DIOD_PID)" || true
+    rm -f "$DIOD_PID"
+  fi
+}
+
 function user_tests {
-  cd "$PROJECT_ROOT/src"
-  python -m pytest -v -rA ../tests/user "$@"
+  cd "$PROJECT_ROOT"
+  python -m pytest -v -rA tests/user "$@"
 }
 
 function cleanup {
+  stop_py9p
+  stop_unpfs
+  stop_diod
   if [[ -f $TMP_DIRS_FILE ]]; then
     xargs -n1 -r rm -rf < $TMP_DIRS_FILE
     rm -f $TMP_DIRS_FILE
@@ -96,20 +116,29 @@ rm -f "$TMP_DIRS_FILE"
 
 echo "PROJECT_ROOT: $PROJECT_ROOT"
 
-echo "Testing py9p server with 9P2000"
-EXPORTED_DIR=""$(mymktempdir)""
-run_py9p "$EXPORTED_DIR" 9P2000
-user_tests --exported "$EXPORTED_DIR" --9p 9P2000
-stop_py9p
+# Diod requires root, so running it conditionally
+if [[ " $@ " =~ " --diod " ]]; then
+  echo "Testing diod server with 9P2000.L"
+  EXPORTED_DIR=""$(mymktempdir)""
+  run_diod "$EXPORTED_DIR"
+  user_tests --exported "$EXPORTED_DIR" --9p 9P2000.L --aname "$EXPORTED_DIR"
+  stop_diod
+else
+  echo "Testing py9p server with 9P2000"
+  EXPORTED_DIR=""$(mymktempdir)""
+  run_py9p "$EXPORTED_DIR" 9P2000
+  user_tests --exported "$EXPORTED_DIR" --9p 9P2000
+  stop_py9p
 
-echo "Testing py9p server with 9P2000.u"
-EXPORTED_DIR=""$(mymktempdir)""
-run_py9p "$EXPORTED_DIR" 9P2000.u
-user_tests --exported "$EXPORTED_DIR" --9p 9P2000.u
-stop_py9p
+  echo "Testing py9p server with 9P2000.u"
+  EXPORTED_DIR=""$(mymktempdir)""
+  run_py9p "$EXPORTED_DIR" 9P2000.u
+  user_tests --exported "$EXPORTED_DIR" --9p 9P2000.u
+  stop_py9p
 
-echo "Testing unpfs server with 9P2000.L"
-EXPORTED_DIR=""$(mymktempdir)""
-run_unpfs "$EXPORTED_DIR"
-user_tests --exported "$EXPORTED_DIR" --9p 9P2000.L
-stop_unpfs
+  echo "Testing unpfs server with 9P2000.L"
+  EXPORTED_DIR=""$(mymktempdir)""
+  run_unpfs "$EXPORTED_DIR"
+  user_tests --exported "$EXPORTED_DIR" --9p 9P2000.L
+  stop_unpfs
+fi

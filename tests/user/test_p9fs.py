@@ -7,6 +7,7 @@ This test suite requires a locally running 9p server that exports an empty direc
 Examples:
     unpfs 'tcp!0.0.0.0!1234' $TMPDIR
     python -m py9p -p 1234 -w -r $TMPDIR
+    sudo diod -f -l 0.0.0.0:1234 -d3 -n -e $TMPDIR
 
 Pass this TMPDIR to the test suite with `--exported`:
     python -m pytest tests/user --exported $TMPDIR
@@ -29,6 +30,7 @@ def fs(pytestconfig):
         username=pytestconfig.getoption('--user'),
         version=pytestconfig.getoption('--9p'),
         verbose=pytestconfig.getoption('--chatty'),
+        aname=pytestconfig.getoption('--aname')
     )
 
 
@@ -156,7 +158,7 @@ def test_copy(fs, exported_path):
 
 
 def test_registration(fs, exported_path):
-    url = f'p9://{fs.username}@{fs.host}:{fs.port}/xxx?version={fs.version.value}'
+    url = f'p9://{fs.username}@{fs.host}:{fs.port}/xxx?version={fs.version.value}&aname={fs.aname}'
     with fsspec.open(url, 'r') as f:
         data = f.read()
         assert data == 'This is a test content'

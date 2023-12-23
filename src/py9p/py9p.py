@@ -1584,12 +1584,13 @@ class Client(object):
             chatty=0,
             ver: Version = Version.v9P2000,
             msize=8192,
+            aname='',
     ):
         self.credentials = credentials
         self.version = ver
         self.msize = msize
         self.fd = Sock(fd, self.dotu, chatty)
-        self.login(authsrv, credentials)
+        self.login(authsrv, credentials, aname)
 
     @property
     def dotu(self):
@@ -1758,7 +1759,7 @@ class Client(object):
         self._clunk(self.CWD)
         self.fd.close()
 
-    def login(self, authsrv, credentials):
+    def login(self, authsrv, credentials, aname=''):
         ver = self.version.to_bytes()
         fcall = self._version(self.msize, ver)
         self.msize = fcall.msize
@@ -1785,7 +1786,9 @@ class Client(object):
             else:
                 raise ClientError('unknown authentication method: %s' % credentials.authmode)
 
-        self._attach(self.ROOT, fcall.afid, credentials.user, b'')
+        if isinstance(aname, str):
+            aname = aname.encode('utf-8')
+        self._attach(self.ROOT, fcall.afid, credentials.user, aname)
         if fcall.afid != NOFID:
             self._clunk(fcall.afid)
         self._walk(self.ROOT, self.CWD, [])
